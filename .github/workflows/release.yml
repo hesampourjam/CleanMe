@@ -52,36 +52,64 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PWD" build.keychain
           rm certificate.p12
 
+      - name: Diagnostics
+        run: |
+          mkdir -p build
+          {
+            echo "=== xcodebuild -version ==="
+            xcodebuild -version
+            echo
+            echo "=== xcode-select -p ==="
+            xcode-select -p
+            echo
+            echo "=== xcodebuild -list ==="
+            xcodebuild -project CleanMe.xcodeproj -list
+            echo
+            echo "=== available schemes ==="
+            ls CleanMe.xcodeproj/xcshareddata/xcschemes/ || true
+            echo
+            echo "=== showBuildSettings (Release) ==="
+            xcodebuild -project CleanMe.xcodeproj -scheme CleanMe -configuration Release -showBuildSettings -json | python3 -c "import json,sys; bs=json.load(sys.stdin)[0]['buildSettings']; [print(f'{k}={v}') for k,v in sorted(bs.items()) if k in ('PRODUCT_BUNDLE_IDENTIFIER','PRODUCT_NAME','CODE_SIGN_ENTITLEMENTS','INFOPLIST_FILE','SWIFT_VERSION','MACOSX_DEPLOYMENT_TARGET','SDKROOT','CODE_SIGN_IDENTITY','CODE_SIGN_STYLE','DEVELOPMENT_TEAM')]"
+          } 2>&1 | tee build/diagnostics.log
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnostics
+          path: build/diagnostics.log
+          if-no-files-found: ignore
+
       - name: Build release archive
         env:
           SIGN_IDENTITY: ${{ secrets.MACOS_CERTIFICATE_NAME }}
         run: |
-          set -x
           mkdir -p build
-          xcodebuild -version
-          xcodebuild -project CleanMe.xcodeproj -list
           if [ -n "$SIGN_IDENTITY" ]; then
             CODESIGN_FLAGS=(CODE_SIGN_IDENTITY="$SIGN_IDENTITY" CODE_SIGN_STYLE=Manual)
           else
-            # Ad-hoc signing is allowed, but we don't require a real identity.
             CODESIGN_FLAGS=(CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO)
           fi
+          # Capture ALL output (stdout+stderr) to file regardless of exit.
+          set +e
           xcodebuild \
             -project CleanMe.xcodeproj \
             -scheme CleanMe \
             -configuration Release \
             -derivedDataPath build \
             -archivePath build/CleanMe.xcarchive \
-            -skipMacroValidation \
-            -skipPackagePluginValidation \
             MARKETING_VERSION=${{ steps.version.outputs.version }} \
             "${CODESIGN_FLAGS[@]}" \
-            archive | tee build/archive.log
-          echo "--- xcarchive contents ---"
-          ls -R build/CleanMe.xcarchive || true
+            archive > build/archive.log 2>&1
+          RC=$?
+          set -e
+          echo "--- tail of archive.log ---"
+          tail -200 build/archive.log
+          echo "--- exit code: $RC ---"
+          exit $RC
 
-      - name: Upload archive log on failure
-        if: failure()
+      - name: Upload archive log
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: archive-log
