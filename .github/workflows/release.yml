@@ -1,0 +1,155 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_15.4.app
+
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate --spec project.yml
+
+      - name: Derive version
+        id: version
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          else
+            VERSION="0.0.0-dev.$(date +%Y%m%d%H%M)"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Building version ${VERSION}"
+
+      - name: Import signing certificate
+        if: env.MACOS_CERTIFICATE != ''
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          KEYCHAIN_PWD: ${{ github.run_id }}
+        run: |
+          echo "$MACOS_CERTIFICATE" | base64 --decode > certificate.p12
+          security create-keychain -p "$KEYCHAIN_PWD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PWD" build.keychain
+          security import certificate.p12 -k build.keychain -P "$MACOS_CERTIFICATE_PWD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PWD" build.keychain
+          rm certificate.p12
+
+      - name: Build release archive
+        env:
+          SIGN_IDENTITY: ${{ secrets.MACOS_CERTIFICATE_NAME }}
+        run: |
+          mkdir -p build
+          if [ -n "$SIGN_IDENTITY" ]; then
+            CODESIGN_FLAGS="CODE_SIGN_IDENTITY=$SIGN_IDENTITY CODE_SIGN_STYLE=Manual"
+          else
+            CODESIGN_FLAGS="CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO"
+          fi
+          xcodebuild \
+            -project CleanMe.xcodeproj \
+            -scheme CleanMe \
+            -configuration Release \
+            -derivedDataPath build \
+            -archivePath build/CleanMe.xcarchive \
+            MARKETING_VERSION=${{ steps.version.outputs.version }} \
+            $CODESIGN_FLAGS \
+            archive
+
+      - name: Export app
+        run: |
+          cat > build/ExportOptions.plist <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>developer-id</string>
+            <key>signingStyle</key>
+            <string>manual</string>
+          </dict>
+          </plist>
+          EOF
+          if [ -n "${{ secrets.MACOS_CERTIFICATE_NAME }}" ]; then
+            xcodebuild -exportArchive \
+              -archivePath build/CleanMe.xcarchive \
+              -exportPath build/export \
+              -exportOptionsPlist build/ExportOptions.plist
+          else
+            mkdir -p build/export
+            cp -R build/CleanMe.xcarchive/Products/Applications/CleanMe.app build/export/
+          fi
+
+      - name: Install create-dmg
+        run: brew install create-dmg
+
+      - name: Create DMG
+        run: |
+          cd build/export
+          create-dmg \
+            --volname "CleanMe" \
+            --window-pos 200 120 \
+            --window-size 600 400 \
+            --icon-size 100 \
+            --icon "CleanMe.app" 175 180 \
+            --app-drop-link 425 180 \
+            --hdiutil-quiet \
+            "CleanMe-${{ steps.version.outputs.version }}.dmg" \
+            "CleanMe.app"
+          mv "CleanMe-${{ steps.version.outputs.version }}.dmg" ../
+
+      - name: Notarize DMG
+        if: env.NOTARIZATION_APPLE_ID != ''
+        env:
+          NOTARIZATION_APPLE_ID: ${{ secrets.NOTARIZATION_APPLE_ID }}
+          NOTARIZATION_TEAM_ID: ${{ secrets.NOTARIZATION_TEAM_ID }}
+          NOTARIZATION_PWD: ${{ secrets.NOTARIZATION_PWD }}
+        run: |
+          DMG="build/CleanMe-${{ steps.version.outputs.version }}.dmg"
+          xcrun notarytool submit "$DMG" \
+            --apple-id "$NOTARIZATION_APPLE_ID" \
+            --team-id "$NOTARIZATION_TEAM_ID" \
+            --password "$NOTARIZATION_PWD" \
+            --wait
+          xcrun stapler staple "$DMG"
+
+      - name: Compute checksum
+        run: |
+          cd build
+          shasum -a 256 CleanMe-${{ steps.version.outputs.version }}.dmg > CleanMe-${{ steps.version.outputs.version }}.dmg.sha256
+          cat CleanMe-${{ steps.version.outputs.version }}.dmg.sha256
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CleanMe-${{ steps.version.outputs.version }}
+          path: |
+            build/CleanMe-${{ steps.version.outputs.version }}.dmg
+            build/CleanMe-${{ steps.version.outputs.version }}.dmg.sha256
+
+      - name: Create GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            build/CleanMe-${{ steps.version.outputs.version }}.dmg
+            build/CleanMe-${{ steps.version.outputs.version }}.dmg.sha256
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(steps.version.outputs.version, '-') }}

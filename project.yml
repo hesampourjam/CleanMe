@@ -1,0 +1,66 @@
+# XcodeGen spec for CleanMe. Regenerate the Xcode project with `./scripts/bootstrap.sh`
+# (or `xcodegen generate`) any time this file changes.
+# Docs: https://github.com/yonaskolb/XcodeGen
+
+name: CleanMe
+options:
+  bundleIdPrefix: dev.cleanme
+  deploymentTarget:
+    macOS: "13.0"
+  developmentLanguage: en
+  createIntermediateGroups: true
+  generateEmptyDirectories: true
+  groupSortPosition: top
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    MACOSX_DEPLOYMENT_TARGET: "13.0"
+    ENABLE_HARDENED_RUNTIME: YES
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    CLANG_ENABLE_MODULES: YES
+    SWIFT_STRICT_CONCURRENCY: minimal
+    # Unsigned builds work out of the box; signed builds set CODE_SIGN_IDENTITY from CI secrets.
+    CODE_SIGN_STYLE: Automatic
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "1"
+
+targets:
+  CleanMe:
+    type: application
+    platform: macOS
+    sources:
+      - path: CleanMe
+        excludes:
+          - "Resources/CleanMe.entitlements"
+          - "Resources/Info.plist"
+    resources:
+      - path: CleanMe/Resources/Assets.xcassets
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.cleanme.CleanMe
+        PRODUCT_NAME: CleanMe
+        INFOPLIST_FILE: CleanMe/Resources/Info.plist
+        CODE_SIGN_ENTITLEMENTS: CleanMe/Resources/CleanMe.entitlements
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        COMBINE_HIDPI_IMAGES: YES
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks"
+    scheme:
+      testTargets:
+        - CleanMeTests
+      gatherCoverageData: false
+
+  CleanMeTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - CleanMeTests
+    dependencies:
+      - target: CleanMe
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.cleanme.CleanMeTests
+        GENERATE_INFOPLIST_FILE: YES
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/CleanMe.app/Contents/MacOS/CleanMe"
