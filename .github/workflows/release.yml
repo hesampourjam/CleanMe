@@ -56,11 +56,15 @@ jobs:
         env:
           SIGN_IDENTITY: ${{ secrets.MACOS_CERTIFICATE_NAME }}
         run: |
+          set -x
           mkdir -p build
+          xcodebuild -version
+          xcodebuild -project CleanMe.xcodeproj -list
           if [ -n "$SIGN_IDENTITY" ]; then
-            CODESIGN_FLAGS="CODE_SIGN_IDENTITY=$SIGN_IDENTITY CODE_SIGN_STYLE=Manual"
+            CODESIGN_FLAGS=(CODE_SIGN_IDENTITY="$SIGN_IDENTITY" CODE_SIGN_STYLE=Manual)
           else
-            CODESIGN_FLAGS="CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO"
+            # Ad-hoc signing is allowed, but we don't require a real identity.
+            CODESIGN_FLAGS=(CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO)
           fi
           xcodebuild \
             -project CleanMe.xcodeproj \
@@ -68,9 +72,21 @@ jobs:
             -configuration Release \
             -derivedDataPath build \
             -archivePath build/CleanMe.xcarchive \
+            -skipMacroValidation \
+            -skipPackagePluginValidation \
             MARKETING_VERSION=${{ steps.version.outputs.version }} \
-            $CODESIGN_FLAGS \
-            archive
+            "${CODESIGN_FLAGS[@]}" \
+            archive | tee build/archive.log
+          echo "--- xcarchive contents ---"
+          ls -R build/CleanMe.xcarchive || true
+
+      - name: Upload archive log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: archive-log
+          path: build/archive.log
+          if-no-files-found: ignore
 
       - name: Export app
         run: |
