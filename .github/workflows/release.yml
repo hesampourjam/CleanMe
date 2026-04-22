@@ -71,6 +71,13 @@ jobs:
             echo "=== showBuildSettings (Release) ==="
             xcodebuild -project CleanMe.xcodeproj -scheme CleanMe -configuration Release -showBuildSettings -json | python3 -c "import json,sys; bs=json.load(sys.stdin)[0]['buildSettings']; [print(f'{k}={v}') for k,v in sorted(bs.items()) if k in ('PRODUCT_BUNDLE_IDENTIFIER','PRODUCT_NAME','CODE_SIGN_ENTITLEMENTS','INFOPLIST_FILE','SWIFT_VERSION','MACOSX_DEPLOYMENT_TARGET','SDKROOT','CODE_SIGN_IDENTITY','CODE_SIGN_STYLE','DEVELOPMENT_TEAM')]"
           } 2>&1 | tee build/diagnostics.log
+          {
+            echo "### Diagnostics"
+            echo
+            echo '```'
+            cat build/diagnostics.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload diagnostics
         if: always()
@@ -103,6 +110,14 @@ jobs:
             archive > build/archive.log 2>&1
           RC=$?
           set -e
+          # Dump to step summary — renders on the run page and is anon-viewable.
+          {
+            echo "### xcodebuild archive output (RC=$RC)"
+            echo
+            echo '```'
+            tail -400 build/archive.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
           echo "--- tail of archive.log ---"
           tail -200 build/archive.log
           echo "--- exit code: $RC ---"
